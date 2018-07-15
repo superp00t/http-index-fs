@@ -2,15 +2,15 @@ package main
 
 import (
 	"github.com/PuerkitoBio/goquery"
-	"github.com/superp00t/etc/yo"
-	"github.com/ogier/pflag"
-	"net/http"
-	"strings"
-	"os/exec"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/hanwen/go-fuse/fuse"
 	"github.com/hanwen/go-fuse/fuse/nodefs"
 	"github.com/hanwen/go-fuse/fuse/pathfs"
-	"github.com/davecgh/go-spew/spew"
+	"github.com/ogier/pflag"
+	"github.com/superp00t/etc/yo"
+	"net/http"
+	"os/exec"
+	"strings"
 )
 
 type IndexFS struct {
@@ -34,12 +34,8 @@ func (i *IndexFS) head(url string) int64 {
 	if err != nil {
 		return -1
 	}
-	
-	if rsp.StatusCode == 301 {
-		return -2
-	}
 
-	if strings.HasSuffix(url, "/") && strings.Contains(rsp.Header.Get("Content-Type"), "text/html") {
+	if rsp.StatusCode == 301 {
 		return -2
 	}
 
@@ -58,7 +54,7 @@ func (i *IndexFS) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.
 	if g == -1 {
 		g = i.head(i.hpath + name + "/")
 	}
-		
+
 	if g == -2 {
 		return &fuse.Attr{
 			Mode: fuse.S_IFDIR | 0644,
@@ -69,23 +65,23 @@ func (i *IndexFS) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.
 		return nil, fuse.ENOENT
 	}
 
-	return &fuse.Attr {
-		Mode: fuse.S_IFREG | 0644, 
+	return &fuse.Attr{
+		Mode: fuse.S_IFREG | 0644,
 		Size: uint64(g),
 	}, fuse.OK
 }
 
 func (me *IndexFS) OpenDir(name string, context *fuse.Context) (c []fuse.DirEntry, code fuse.Status) {
-	r, err := http.NewRequest("GET", me.hpath + name, nil)
+	r, err := http.NewRequest("GET", me.hpath+name, nil)
 	if err != nil {
 		return nil, fuse.ENOENT
 	}
-	
-	yo.Println("(OpenDir) GET", me.hpath + name)
+
+	yo.Println("(OpenDir) GET", me.hpath+name)
 
 	rsp, err := me.c.Do(r)
 	if err != nil {
-		return  nil, fuse.ENOENT
+		return nil, fuse.ENOENT
 	}
 
 	var de []fuse.DirEntry
@@ -102,7 +98,7 @@ func (me *IndexFS) OpenDir(name string, context *fuse.Context) (c []fuse.DirEntr
 			if strings.HasSuffix(nname, "/") {
 				nname = strings.TrimRight(nname, "/")
 				de = append(de, fuse.DirEntry{
-					Name:nname,
+					Name: nname,
 					Mode: fuse.S_IFDIR,
 				})
 			} else {
@@ -114,7 +110,7 @@ func (me *IndexFS) OpenDir(name string, context *fuse.Context) (c []fuse.DirEntr
 
 		}
 	})
-	
+
 	yo.Println("(OpenDir)", spew.Sdump(de))
 
 	return de, fuse.OK
@@ -145,18 +141,23 @@ func main() {
 	if len(pflag.Args()) < 1 {
 		yo.Fatal("Usage: http-index-fs (http url) (mount point)")
 	}
-	
+
 	exec.Command("/bin/fusermount", "-uz", pflag.Arg(1)).Run()
-	
-	yo.Println("Mounting", pflag.Arg(0), "to", pflag.Arg(1))
+
+	srcURL := pflag.Arg(0)
+	if !strings.HasSuffix(srcURL, "/") {
+		srcURL += "/"
+	}
+
+	yo.Println("Mounting", srcURL, "to", pflag.Arg(1))
 	nfs := pathfs.NewPathNodeFs(&IndexFS{
 		FileSystem: pathfs.NewDefaultFileSystem(),
-		hpath:      pflag.Arg(0),
-		c: &http.Client{},
+		hpath:      srcURL,
+		c:          &http.Client{},
 	}, nil)
 	server, _, err := nodefs.MountRoot(pflag.Arg(1), nfs.Root(), nil)
 	if err != nil {
-		yo.Fatal("Mount fail: err")
+		yo.Fatal("Mount fail:", er)
 	}
 	server.Serve()
 }
