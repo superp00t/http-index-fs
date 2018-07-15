@@ -21,4 +21,4 @@ $ http-index-fs http://localhost:80/ /path/to/mountpoint
 - [Go Programming Language](https://golang.org/)
 - [FUSE Go bindings](https://github.com/hanwen/go-fuse) provides the filesystem virtualization interface
 - [GoQuery](https://github.com/PuerkitoBio/goquery) extracts the anchor links in Web index pages
-- [Pflag](https://github.com/ogier/pflag, makes CLI programming easier)
+- [Pflag](https://github.com/ogier/pflag) makes CLI programming easier
