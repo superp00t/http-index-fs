@@ -10,7 +10,7 @@ import (
 	"github.com/hanwen/go-fuse/fuse"
 )
 
-// hFile provides a FUSE file interface for a staticly sized HTTP resource.
+// hFile provides a FUSE file interface for a statically sized HTTP resource.
 type hFile struct {
 	c    *http.Client
 	url  string
