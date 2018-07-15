@@ -1,14 +1,16 @@
 package main
 
 import (
-	"github.com/superp00t/etc"
-	"flag"
-	"log"
+	"github.com/PuerkitoBio/goquery"
+	"github.com/superp00t/etc/yo"
+	"github.com/ogier/pflag"
 	"net/http"
-
+	"strings"
+	"os/exec"
 	"github.com/hanwen/go-fuse/fuse"
 	"github.com/hanwen/go-fuse/fuse/nodefs"
 	"github.com/hanwen/go-fuse/fuse/pathfs"
+	"github.com/davecgh/go-spew/spew"
 )
 
 type IndexFS struct {
@@ -22,6 +24,7 @@ type IndexFS struct {
    ============
 */
 func (i *IndexFS) head(url string) int64 {
+	yo.Println("HEAD", url)
 	r, err := http.NewRequest("HEAD", url, nil)
 	if err != nil {
 		return -1
@@ -31,12 +34,16 @@ func (i *IndexFS) head(url string) int64 {
 	if err != nil {
 		return -1
 	}
+	
+	if rsp.StatusCode == 301 {
+		return -2
+	}
 
 	if strings.HasSuffix(url, "/") && strings.Contains(rsp.Header.Get("Content-Type"), "text/html") {
 		return -2
 	}
 
-	if rsp.Status != 200 {
+	if rsp.StatusCode != 200 {
 		return -1
 	}
 
@@ -48,9 +55,13 @@ func (i *IndexFS) head(url string) int64 {
 func (i *IndexFS) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.Status) {
 	g := i.head(i.hpath + name)
 
+	if g == -1 {
+		g = i.head(i.hpath + name + "/")
+	}
+		
 	if g == -2 {
 		return &fuse.Attr{
-			Mode: fuse.S_IFDIR | 0644
+			Mode: fuse.S_IFDIR | 0644,
 		}, fuse.OK
 	}
 
@@ -65,51 +76,53 @@ func (i *IndexFS) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.
 }
 
 func (me *IndexFS) OpenDir(name string, context *fuse.Context) (c []fuse.DirEntry, code fuse.Status) {
-	r, err := http.NewRequest("GET", hpath + name, nil)
+	r, err := http.NewRequest("GET", me.hpath + name, nil)
 	if err != nil {
 		return nil, fuse.ENOENT
 	}
+	
+	yo.Println("(OpenDir) GET", me.hpath + name)
 
-	rsp, err := i.c.Do(r)
+	rsp, err := me.c.Do(r)
 	if err != nil {
 		return  nil, fuse.ENOENT
 	}
 
-	e := etc.NewBuffer()
-	io.Copy(rsp.Body, e)
-
-	c := e.ToString()
-
 	var de []fuse.DirEntry
 
-	cz, err := goquery.NewDocumentFromString(c)
+	cz, err := goquery.NewDocumentFromReader(rsp.Body)
 	if err != nil {
 		yo.Fatal(err)
 	}
 
 	cz.Find("a").Each(func(i int, s *goquery.Selection) {
+		yo.Println("warn", s.Text())
 		nname := s.Text()
 		if nname != "../" {
 			if strings.HasSuffix(nname, "/") {
+				nname = strings.TrimRight(nname, "/")
 				de = append(de, fuse.DirEntry{
-					Name: name,
+					Name:nname,
 					Mode: fuse.S_IFDIR,
 				})
 			} else {
 				de = append(de, fuse.DirEntry{
-					Name: name,
+					Name: nname,
 					Mode: fuse.S_IFREG,
 				})
 			}
 
 		}
 	})
+	
+	yo.Println("(OpenDir)", spew.Sdump(de))
 
 	return de, fuse.OK
 }
 
-func (me *IndexFs) Open(name string, flags uint32, context *fuse.Context) (file nodefs.File, code fuse.Status) {
-	g := me.head(me.url + name)
+func (me *IndexFS) Open(name string, flags uint32, context *fuse.Context) (file nodefs.File, code fuse.Status) {
+	yo.Println("(Open)", name)
+	g := me.head(me.hpath + name)
 	if g < 0 {
 		return nil, fuse.ENOENT
 	}
@@ -119,7 +132,7 @@ func (me *IndexFs) Open(name string, flags uint32, context *fuse.Context) (file 
 	}
 
 	f := new(hFile)
-	f.url = me.url + name
+	f.url = me.hpath + name
 	f.c = me.c
 	f.size = g
 	f.File = nodefs.NewDefaultFile()
@@ -128,14 +141,22 @@ func (me *IndexFs) Open(name string, flags uint32, context *fuse.Context) (file 
 }
 
 func main() {
-	flag.Parse()
-	if len(flag.Args()) < 1 {
-		log.Fatal("Usage:\n  hello MOUNTPOINT")
+	pflag.Parse()
+	if len(pflag.Args()) < 1 {
+		yo.Fatal("Usage: http-index-fs (http url) (mount point)")
 	}
-	nfs := pathfs.NewPathNodeFs(&HelloFs{FileSystem: pathfs.NewDefaultFileSystem()}, nil)
-	server, _, err := nodefs.MountRoot(flag.Arg(0), nfs.Root(), nil)
+	
+	exec.Command("/bin/fusermount", "-uz", pflag.Arg(1)).Run()
+	
+	yo.Println("Mounting", pflag.Arg(0), "to", pflag.Arg(1))
+	nfs := pathfs.NewPathNodeFs(&IndexFS{
+		FileSystem: pathfs.NewDefaultFileSystem(),
+		hpath:      pflag.Arg(0),
+		c: &http.Client{},
+	}, nil)
+	server, _, err := nodefs.MountRoot(pflag.Arg(1), nfs.Root(), nil)
 	if err != nil {
-		log.Fatalf("Mount fail: %v\n", err)
+		yo.Fatal("Mount fail: err")
 	}
 	server.Serve()
 }
