@@ -157,7 +157,7 @@ func main() {
 	}, nil)
 	server, _, err := nodefs.MountRoot(pflag.Arg(1), nfs.Root(), nil)
 	if err != nil {
-		yo.Fatal("Mount fail:", er)
+		yo.Fatal("Mount fail:", err)
 	}
 	server.Serve()
 }
