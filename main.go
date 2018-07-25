@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -85,48 +86,88 @@ func pathEscape(str string) string {
 }
 
 func (i *IndexFS) GetAttr(name string, context *fuse.Context) (*fuse.Attr, fuse.Status) {
-	trp := i.hpath + "/" + pathEscape(name)
-	g := i.head(trp)
-
-	if g == -1 {
-		g = i.head(trp + "/")
-	}
-
-	yo.Println("G1", g, name)
-
 	dirAttr := &fuse.Attr{
 		Mode: fuse.S_IFDIR | 0644,
 	}
-
 	if name == "" {
 		return dirAttr, fuse.OK
 	}
+	szi, ok := i.sizes.Load(name)
+	if !ok {
+		g := i.head(i.hpath + "/" + pathEscape(name))
+		if g == -2 {
+			return dirAttr, fuse.OK
+		}
 
-	if g == -2 {
-		return dirAttr, fuse.OK
+		if g == -1 {
+			return nil, fuse.ENOENT
+		}
+
+		i.sizes.Store(name, g)
+
+		return &fuse.Attr{
+			Mode: fuse.S_IFREG | 0644,
+			Size: uint64(g),
+		}, fuse.OK
 	}
 
-	if g < 0 {
-		return nil, fuse.ENOENT
+	sz := szi.(int64)
+
+	if sz == -1 {
+		return dirAttr, fuse.OK
 	}
 
 	return &fuse.Attr{
 		Mode: fuse.S_IFREG | 0644,
-		Size: uint64(g),
+		Size: uint64(sz),
 	}, fuse.OK
 }
 
 func parseList(s string) []int64 {
 	i := etc.FromString(s)
 
-	o := []int64{}
+	o := []int64{0}
+
+	_, err := i.ReadUntilToken("<pre><a href=\"../\">../</a>")
+	if err != nil {
+		yo.Fatal(err)
+		return o
+	}
 
 	for {
-		in, _, err := i.ReadRune()
+		i.ReadUntilToken("</a>")
+
+		_, err = i.ReadUntilToken(":")
+		if err != nil {
+			yo.Warn(err)
+			break
+		}
+
+		yo.Println(i.ReadFixedString(2))
+
+		szStr, err := i.ReadUntilToken("\r\n")
 		if err != nil {
 			break
 		}
+
+		szStr = strings.TrimLeft(szStr, " ")
+		szStr = strings.TrimRight(szStr, " ")
+
+		if szStr == "-" {
+			o = append(o, 4)
+		} else {
+			i, err := strconv.ParseInt(szStr, 0, 64)
+			if err != nil {
+				yo.Println(`"` + szStr + `"`)
+				panic(err)
+			}
+
+			o = append(o, i)
+		}
 	}
+
+	yo.Println(spew.Sdump(o))
+	return o
 }
 
 func (me *IndexFS) OpenDir(name string, context *fuse.Context) (c []fuse.DirEntry, code fuse.Status) {
@@ -171,14 +212,13 @@ func (me *IndexFS) OpenDir(name string, context *fuse.Context) (c []fuse.DirEntr
 		yo.Println("warn", s.Text())
 		u, ok := s.Attr("href")
 		if !ok {
+			yo.Fatal("No href attribute on a?")
 			return
 		}
 
-		last := strings.Split(u, "/")
-
-		lastU, err := url.QueryUnescape(last[len(last)-1])
+		lastU, err := url.QueryUnescape(u)
 		if err != nil {
-			yo.Println(err)
+			yo.Fatal(err)
 			return
 		}
 
@@ -187,17 +227,23 @@ func (me *IndexFS) OpenDir(name string, context *fuse.Context) (c []fuse.DirEntr
 		if s.Text() != "../" {
 			if strings.HasSuffix(nname, "/") {
 				nname = strings.TrimRight(nname, "/")
+				if name == "" {
+					me.sizes.Store(nname, int64(-1))
+				} else {
+					me.sizes.Store(name+"/"+nname, int64(-1))
+				}
 				de = append(de, fuse.DirEntry{
 					Name: nname,
 					Mode: fuse.S_IFDIR,
 				})
+
 			} else {
+				me.sizes.Store(name+"/"+nname, sizes[i])
 				de = append(de, fuse.DirEntry{
 					Name: nname,
 					Mode: fuse.S_IFREG,
 				})
 			}
-
 		}
 	})
 
@@ -207,7 +253,7 @@ func (me *IndexFS) OpenDir(name string, context *fuse.Context) (c []fuse.DirEntr
 }
 
 func (me *IndexFS) Open(name string, flags uint32, context *fuse.Context) (file nodefs.File, code fuse.Status) {
-	g := me.head(me.hpath + name)
+	g := me.head(me.hpath + "/" + name)
 	yo.Println("(Open)", name, g)
 	if g < 0 {
 		return nil, fuse.ENOENT
@@ -218,7 +264,7 @@ func (me *IndexFS) Open(name string, flags uint32, context *fuse.Context) (file 
 	}
 
 	f := new(hFile)
-	f.url = me.hpath + name
+	f.url = me.hpath + "/" + name
 	f.c = me.c
 	f.size = g
 	f.File = nodefs.NewDefaultFile()
